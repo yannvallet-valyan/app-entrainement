@@ -368,7 +368,7 @@ function showLoginError(msg) {
 
 // ── DATA ─────────────────────────────────────
 async function loadEntries() {
-  const { data, error } = await db.from('entries').select('date, status, duration, notes');
+  const { data, error } = await db.from('entries').select('date, status, duration, notes, workout_key');
   if (error) { console.error(error); return; }
   entries = {};
   data.forEach(r => {
@@ -637,10 +637,11 @@ async function saveEntry() {
     workout_key: activeWorkoutKey,
   };
 
-  entries[activeKey] = entryData;  // mise à jour locale immédiate
+  const keyToSave = activeKey;  // ← capturer avant que closeModal() l'efface
+  entries[keyToSave] = entryData;
   render();
   closeModal();
-  await persistEntry(activeKey, entryData);  // sync Supabase
+  await persistEntry(keyToSave, entryData);  // sync Supabase
 }
 
 function closeModal() {
