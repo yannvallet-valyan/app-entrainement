@@ -372,7 +372,7 @@ async function loadEntries() {
   if (error) { console.error(error); return; }
   entries = {};
   data.forEach(r => {
-    entries[r.date] = { status: r.status, duration: r.duration || 0, notes: r.notes || '' };
+    entries[r.date] = { status: r.status, duration: r.duration || 0, notes: r.notes || '', workout_key: r.workout_key || null };
   });
 }
 
