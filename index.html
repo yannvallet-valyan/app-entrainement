@@ -130,14 +130,6 @@
     .modal-save:hover { background: #1e293b; }
     .modal-save:disabled { background: #94a3b8; cursor: not-allowed; }
 
-    /* ── PROGRAM SWITCHER ── */
-    .program-switch { margin-bottom: 16px; }
-    .program-switch label { display: block; font-size: 0.78rem; font-weight: 600; margin-bottom: 5px; }
-    .program-options { display: flex; gap: 5px; flex-wrap: wrap; }
-    .program-opt { padding: 6px 10px; border-radius: 8px; border: 2px solid var(--border); background: white; cursor: pointer; font-size: 0.68rem; font-weight: 600; transition: all .15s; }
-    .program-opt:hover { border-color: #94a3b8; }
-    .program-opt.selected { border-color: #6366f1; background: #eef2ff; color: #4f46e5; }
-
     .stats-bar::-webkit-scrollbar { height: 4px; }
     .stats-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
@@ -223,10 +215,6 @@
     <p class="modal-date" id="modalDate"></p>
     <p class="modal-title" id="modalTitle"></p>
     <div class="workout-info" id="workoutInfo"></div>
-    <div class="program-switch">
-      <label>Changer le programme</label>
-      <div class="program-options" id="programOptions"></div>
-    </div>
     <div class="form-row">
       <label>Résultat</label>
       <div class="toggle-group" id="statusGroup">
@@ -273,33 +261,17 @@ const SUPABASE_ANON_KEY = 'sb_publishable__pfcNS9pEW5V5x6WABYU0Q_kGzQiPE9';     
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ── PROGRAMMES DISPONIBLES ──────────────────
-const PROGRAMS = {
-  muscu_a: { type:'muscu', label:'Muscu A', detail:'Full body\nSquat · Développé\nRowing · Gainage',     duration:55 },
-  muscu_b: { type:'muscu', label:'Muscu B', detail:'Full body\nSoulevé · Tractions\nPresse · Épaules',    duration:55 },
-  zone2:   { type:'zone2', label:'Zone 2',  detail:'Vélo stationnaire\nAllure conversation\n130–145 bpm', duration:45 },
-  hiit:    { type:'hiit',  label:'HIIT',    detail:'Vélo intervals\n8× 30s sprint\n90s récup active',     duration:25 },
-  repos:   { type:'repos', label:'Repos',   detail:'Récupération\nMarche optionnelle\nÉtirements',        duration:0  },
-};
-
-// ── PLAN PAR DÉFAUT ─────────────────────────
+// ── PLAN ─────────────────────────────────────
 // Jours : 0=Lun … 6=Dim
 const PLAN = {
-  0: 'muscu_a',
-  1: 'zone2',
-  2: 'repos',
-  3: 'muscu_b',
-  4: 'zone2',
-  5: 'hiit',
-  6: 'repos',
+  0: { type:'muscu', label:'Muscu A', detail:'Full body\nSquat · Développé\nRowing · Gainage',     duration:55 },
+  1: { type:'zone2', label:'Zone 2',  detail:'Vélo stationnaire\nAllure conversation\n130–145 bpm', duration:45 },
+  2: { type:'repos', label:'Repos',   detail:'Récupération\nMarche optionnelle\nÉtirements',        duration:0  },
+  3: { type:'muscu', label:'Muscu B', detail:'Full body\nSoulevé · Tractions\nPresse · Épaules',    duration:55 },
+  4: { type:'zone2', label:'Zone 2',  detail:'Vélo stationnaire\nAllure conversation\n130–145 bpm', duration:45 },
+  5: { type:'hiit',  label:'HIIT',    detail:'Vélo intervals\n8× 30s sprint\n90s récup active',     duration:25 },
+  6: { type:'repos', label:'Repos',   detail:'Repos complet\nou marche légère',                     duration:0  },
 };
-
-// Retourne le programme effectif pour un jour (avec override si défini)
-function getPlan(key, wd) {
-  const entry = entries[key];
-  if (entry?.program && PROGRAMS[entry.program]) return PROGRAMS[entry.program];
-  return PROGRAMS[PLAN[wd]];
-}
 
 const TYPE_STYLE = {
   muscu: { bg:'var(--muscu-bg)', color:'var(--muscu)' },
@@ -314,8 +286,6 @@ let entries       = {};   // "YYYY-MM-DD" → {status, duration, notes}
 let currentYear, currentMonth;
 let activeKey     = null;
 let activeStatus  = null;
-let activeProgram = null;
-let activeWD      = null;
 
 // ── SCREENS ──────────────────────────────────
 function showScreen(name) {
@@ -380,20 +350,38 @@ function showLoginError(msg) {
 
 // ── DATA ─────────────────────────────────────
 async function loadEntries() {
-  const { data, error } = await db.from('entries').select('date, status, duration, notes, program');
+  const { data, error } = await db.from('entries').select('date, status, duration, notes');
   if (error) { console.error(error); return; }
   entries = {};
   data.forEach(r => {
-    entries[r.date] = { status: r.status, duration: r.duration || 0, notes: r.notes || '', program: r.program || null };
+    entries[r.date] = { status: r.status, duration: r.duration || 0, notes: r.notes || '' };
   });
 }
 
 async function persistEntry(key, entryData) {
-  const { error } = await db.from('entries').upsert(
-    { user_id: session.user.id, date: key, ...entryData, updated_at: new Date().toISOString() },
-    { onConflict: 'user_id,date' }
-  );
-  showToast(error ? '⚠️ Erreur de sauvegarde' : '✓ Sauvegardé', error ? '#ef4444' : '#22c55e');
+  // Vérifie si une entrée existe déjà pour ce jour
+  const { data: existing } = await db
+    .from('entries')
+    .select('id')
+    .eq('user_id', session.user.id)
+    .eq('date', key)
+    .maybeSingle();
+
+  let error;
+  if (existing) {
+    // Met à jour l'entrée existante
+    ({ error } = await db
+      .from('entries')
+      .update({ ...entryData, updated_at: new Date().toISOString() })
+      .eq('id', existing.id));
+  } else {
+    // Crée une nouvelle entrée
+    ({ error } = await db
+      .from('entries')
+      .insert({ user_id: session.user.id, date: key, ...entryData }));
+  }
+
+  showToast(error ? '⚠️ Erreur : ' + error.message : '✓ Sauvegardé', error ? '#ef4444' : '#22c55e');
 }
 
 function showToast(msg, color) {
@@ -435,7 +423,7 @@ function renderCalendar() {
   for (let d=1; d<=daysInMonth; d++) {
     const wd    = getWD(currentYear, currentMonth, d);
     const key   = dateKey(currentYear, currentMonth, d);
-    const plan  = getPlan(key, wd);
+    const plan  = PLAN[wd];
     const entry = entries[key];
     const isToday = t.y===currentYear && t.m===currentMonth && t.d===d;
     const isDone  = entry && (entry.status==='fait' || entry.status==='partiel');
@@ -535,7 +523,7 @@ function renderWeekProgress() {
     const dd  = new Date(mon); dd.setDate(dd.getDate()+i);
     const key = dateKey(dd.getFullYear(),dd.getMonth()+1,dd.getDate());
     const e   = entries[key];
-    const st  = TYPE_STYLE[getPlan(key, i).type];
+    const st  = TYPE_STYLE[PLAN[i].type];
     const mins = e?.duration || 0;
     const pct  = Math.min(mins/90*100,100);
     const active = e && ['fait','partiel'].includes(e.status);
@@ -553,20 +541,14 @@ function renderWeekProgress() {
 // ── MODAL ────────────────────────────────────
 function openModal(key, y, m, d, wd) {
   activeKey   = key;
-  activeWD    = wd;
+  const plan  = PLAN[wd];
   const entry = entries[key] || {};
-  const currentProgramKey = entry.program || PLAN[wd];
-  activeProgram = currentProgramKey;
-  const plan  = PROGRAMS[currentProgramKey];
 
   document.getElementById('modalDate').textContent  = `${DAYS_FR[wd]} ${d} ${MONTHS_FR[m-1]} ${y}`;
   document.getElementById('modalTitle').textContent = plan.label;
   document.getElementById('workoutInfo').innerHTML  =
     `<strong>Programme prévu</strong>${plan.detail.split('\n').join('<br>')}` +
     (plan.duration ? `<br><br><strong>Durée cible</strong> ${plan.duration} min` : '');
-
-  // Render program options
-  renderProgramOptions(currentProgramKey);
 
   activeStatus = entry.status || null;
   updateStatusBtns();
@@ -575,32 +557,6 @@ function openModal(key, y, m, d, wd) {
   document.getElementById('modalSaveBtn').disabled    = false;
   document.getElementById('modalSaveBtn').textContent = 'Enregistrer';
   document.getElementById('overlay').classList.add('open');
-}
-
-function renderProgramOptions(selected) {
-  const container = document.getElementById('programOptions');
-  container.innerHTML = '';
-  Object.entries(PROGRAMS).forEach(([key, prog]) => {
-    const btn = document.createElement('button');
-    btn.className = 'program-opt' + (key === selected ? ' selected' : '');
-    const st = TYPE_STYLE[prog.type];
-    if (key === selected) {
-      btn.style.cssText = `border-color:${st.color};background:${st.bg};color:${st.color}`;
-    }
-    btn.textContent = prog.label;
-    btn.onclick = () => switchProgram(key);
-    container.appendChild(btn);
-  });
-}
-
-function switchProgram(programKey) {
-  activeProgram = programKey;
-  const plan = PROGRAMS[programKey];
-  document.getElementById('modalTitle').textContent = plan.label;
-  document.getElementById('workoutInfo').innerHTML  =
-    `<strong>Programme prévu</strong>${plan.detail.split('\n').join('<br>')}` +
-    (plan.duration ? `<br><br><strong>Durée cible</strong> ${plan.duration} min` : '');
-  renderProgramOptions(programKey);
 }
 
 function setStatus(val) {
@@ -623,12 +579,10 @@ async function saveEntry() {
   saveBtn.disabled    = true;
   saveBtn.textContent = 'Enregistrement…';
 
-  const isOverride = activeProgram !== PLAN[activeWD];
   const entryData = {
     status:   activeStatus,
     duration: parseInt(document.getElementById('durationInput').value) || 0,
     notes:    document.getElementById('notesInput').value.trim(),
-    program:  isOverride ? activeProgram : null,
   };
 
   entries[activeKey] = entryData;  // mise à jour locale immédiate
@@ -639,7 +593,7 @@ async function saveEntry() {
 
 function closeModal() {
   document.getElementById('overlay').classList.remove('open');
-  activeKey = activeStatus = activeProgram = activeWD = null;
+  activeKey = activeStatus = null;
 }
 
 // ── NAVIGATION ───────────────────────────────
