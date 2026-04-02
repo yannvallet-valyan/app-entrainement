@@ -117,6 +117,10 @@
     .toggle-btn.active-partiel { border-color: #f59e0b; background: #fffbeb; color: #d97706; }
     .toggle-btn.active-rate    { border-color: #ef4444; background: #fef2f2; color: #dc2626; }
     .toggle-btn.active-repos   { border-color: #9ca3af; background: #f9fafb; color: #6b7280; }
+    .workout-type-group { display: flex; gap: 5px; flex-wrap: wrap; }
+    .wtype-btn { flex: 1; min-width: 60px; padding: 7px 4px; border-radius: 8px; border: 2px solid var(--border); background: white; cursor: pointer; font-size: 0.68rem; font-weight: 700; transition: all .15s; text-align: center; }
+    .wtype-btn:hover { background: var(--bg); }
+    .wtype-btn.active { border-color: #6366f1; background: #eef2ff; color: #4f46e5; }
     .duration-input { display: flex; align-items: center; gap: 8px; }
     .duration-input input { width: 72px; padding: 9px; border: 1.5px solid var(--border); border-radius: 8px; font-size: 0.95rem; font-weight: 700; text-align: center; outline: none; }
     .duration-input input:focus { border-color: #6366f1; }
@@ -214,6 +218,10 @@
     <button class="modal-close" id="modalClose">✕</button>
     <p class="modal-date" id="modalDate"></p>
     <p class="modal-title" id="modalTitle"></p>
+    <div class="form-row">
+      <label>Type de séance</label>
+      <div class="workout-type-group" id="workoutTypeGroup"></div>
+    </div>
     <div class="workout-info" id="workoutInfo"></div>
     <div class="form-row">
       <label>Résultat</label>
@@ -261,17 +269,26 @@ const SUPABASE_ANON_KEY = 'sb_publishable__pfcNS9pEW5V5x6WABYU0Q_kGzQiPE9';     
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ── PLAN ─────────────────────────────────────
-// Jours : 0=Lun … 6=Dim
-const PLAN = {
-  0: { type:'muscu', label:'Muscu A', detail:'Full body\nSquat · Développé\nRowing · Gainage',     duration:55 },
-  1: { type:'zone2', label:'Zone 2',  detail:'Vélo stationnaire\nAllure conversation\n130–145 bpm', duration:45 },
-  2: { type:'repos', label:'Repos',   detail:'Récupération\nMarche optionnelle\nÉtirements',        duration:0  },
-  3: { type:'muscu', label:'Muscu B', detail:'Full body\nSoulevé · Tractions\nPresse · Épaules',    duration:55 },
-  4: { type:'zone2', label:'Zone 2',  detail:'Vélo stationnaire\nAllure conversation\n130–145 bpm', duration:45 },
-  5: { type:'hiit',  label:'HIIT',    detail:'Vélo intervals\n8× 30s sprint\n90s récup active',     duration:25 },
-  6: { type:'repos', label:'Repos',   detail:'Repos complet\nou marche légère',                     duration:0  },
+// ── CATALOGUE DE SÉANCES ─────────────────────
+const WORKOUTS = {
+  muscu_a: { type:'muscu', label:'Muscu A', detail:'Full body\nSquat · Développé\nRowing · Gainage',     duration:55 },
+  muscu_b: { type:'muscu', label:'Muscu B', detail:'Full body\nSoulevé · Tractions\nPresse · Épaules',    duration:55 },
+  zone2:   { type:'zone2', label:'Zone 2',  detail:'Vélo stationnaire\nAllure conversation\n130–145 bpm', duration:45 },
+  hiit:    { type:'hiit',  label:'HIIT',    detail:'Vélo intervals\n8× 30s sprint\n90s récup active',     duration:25 },
+  repos:   { type:'repos', label:'Repos',   detail:'Récupération\nMarche optionnelle\nÉtirements',        duration:0  },
 };
+
+// ── PLAN PAR DÉFAUT (0=Lun … 6=Dim) ──────────
+const PLAN = { 0:'muscu_a', 1:'zone2', 2:'repos', 3:'muscu_b', 4:'zone2', 5:'hiit', 6:'repos' };
+
+// Retourne le workout effectif d'un jour (override si défini, sinon plan par défaut)
+function getWorkout(dateKey, wd) {
+  const override = entries[dateKey]?.workout_key;
+  return WORKOUTS[override] || WORKOUTS[PLAN[wd]];
+}
+function getWorkoutKey(dateKey, wd) {
+  return entries[dateKey]?.workout_key || PLAN[wd];
+}
 
 const TYPE_STYLE = {
   muscu: { bg:'var(--muscu-bg)', color:'var(--muscu)' },
@@ -284,8 +301,9 @@ const TYPE_STYLE = {
 let session       = null;
 let entries       = {};   // "YYYY-MM-DD" → {status, duration, notes}
 let currentYear, currentMonth;
-let activeKey     = null;
-let activeStatus  = null;
+let activeKey        = null;
+let activeStatus     = null;
+let activeWorkoutKey = null;
 
 // ── SCREENS ──────────────────────────────────
 function showScreen(name) {
@@ -423,11 +441,11 @@ function renderCalendar() {
   for (let d=1; d<=daysInMonth; d++) {
     const wd    = getWD(currentYear, currentMonth, d);
     const key   = dateKey(currentYear, currentMonth, d);
-    const plan  = PLAN[wd];
+    const workout = getWorkout(key, wd);
     const entry = entries[key];
     const isToday = t.y===currentYear && t.m===currentMonth && t.d===d;
     const isDone  = entry && (entry.status==='fait' || entry.status==='partiel');
-    const st      = TYPE_STYLE[plan.type];
+    const st      = TYPE_STYLE[workout.type];
 
     const cell = document.createElement('div');
     cell.className = 'day-cell' + (isToday?' today':'') + (isDone?' done':'');
@@ -443,13 +461,13 @@ function renderCalendar() {
     const badge = document.createElement('span');
     badge.className = 'type-badge';
     badge.style.cssText = `background:${st.bg};color:${st.color}`;
-    badge.textContent = plan.label;
+    badge.textContent = workout.label;
     cell.appendChild(badge);
 
     // Detail line
     const det = document.createElement('div');
     det.className = 'day-detail';
-    det.textContent = plan.detail.split('\n')[0];
+    det.textContent = workout.detail.split('\n')[0];
     cell.appendChild(det);
 
     // Done indicator
@@ -523,7 +541,8 @@ function renderWeekProgress() {
     const dd  = new Date(mon); dd.setDate(dd.getDate()+i);
     const key = dateKey(dd.getFullYear(),dd.getMonth()+1,dd.getDate());
     const e   = entries[key];
-    const st  = TYPE_STYLE[PLAN[i].type];
+    const wk  = getWorkout(key, i);
+    const st  = TYPE_STYLE[wk.type];
     const mins = e?.duration || 0;
     const pct  = Math.min(mins/90*100,100);
     const active = e && ['fait','partiel'].includes(e.status);
@@ -540,15 +559,14 @@ function renderWeekProgress() {
 
 // ── MODAL ────────────────────────────────────
 function openModal(key, y, m, d, wd) {
-  activeKey   = key;
-  const plan  = PLAN[wd];
-  const entry = entries[key] || {};
+  activeKey        = key;
+  const entry      = entries[key] || {};
+  activeWorkoutKey = entry.workout_key || PLAN[wd];
 
-  document.getElementById('modalDate').textContent  = `${DAYS_FR[wd]} ${d} ${MONTHS_FR[m-1]} ${y}`;
-  document.getElementById('modalTitle').textContent = plan.label;
-  document.getElementById('workoutInfo').innerHTML  =
-    `<strong>Programme prévu</strong>${plan.detail.split('\n').join('<br>')}` +
-    (plan.duration ? `<br><br><strong>Durée cible</strong> ${plan.duration} min` : '');
+  document.getElementById('modalDate').textContent = `${DAYS_FR[wd]} ${d} ${MONTHS_FR[m-1]} ${y}`;
+
+  renderWorkoutTypeBtns(wd);
+  updateWorkoutInfo();
 
   activeStatus = entry.status || null;
   updateStatusBtns();
@@ -557,6 +575,39 @@ function openModal(key, y, m, d, wd) {
   document.getElementById('modalSaveBtn').disabled    = false;
   document.getElementById('modalSaveBtn').textContent = 'Enregistrer';
   document.getElementById('overlay').classList.add('open');
+}
+
+function renderWorkoutTypeBtns(wd) {
+  const group = document.getElementById('workoutTypeGroup');
+  group.innerHTML = '';
+  Object.entries(WORKOUTS).forEach(([k, w]) => {
+    const st  = TYPE_STYLE[w.type];
+    const btn = document.createElement('button');
+    btn.className = 'wtype-btn' + (activeWorkoutKey === k ? ' active' : '');
+    btn.style.borderColor = activeWorkoutKey === k ? st.color : '';
+    btn.style.background  = activeWorkoutKey === k ? st.bg    : '';
+    btn.style.color       = activeWorkoutKey === k ? st.color : '';
+    btn.textContent = w.label;
+    btn.onclick = () => setWorkoutKey(k, wd);
+    group.appendChild(btn);
+  });
+}
+
+function setWorkoutKey(k, wd) {
+  activeWorkoutKey = k;
+  renderWorkoutTypeBtns(wd);
+  updateWorkoutInfo();
+  // Pré-remplir la durée cible si le champ est vide
+  const dur = document.getElementById('durationInput').value;
+  if (!dur) document.getElementById('durationInput').value = WORKOUTS[k].duration || '';
+}
+
+function updateWorkoutInfo() {
+  const w = WORKOUTS[activeWorkoutKey];
+  document.getElementById('modalTitle').textContent = w.label;
+  document.getElementById('workoutInfo').innerHTML  =
+    `<strong>Programme</strong>${w.detail.split('\n').join('<br>')}` +
+    (w.duration ? `<br><br><strong>Durée cible</strong> ${w.duration} min` : '');
 }
 
 function setStatus(val) {
@@ -580,9 +631,10 @@ async function saveEntry() {
   saveBtn.textContent = 'Enregistrement…';
 
   const entryData = {
-    status:   activeStatus,
-    duration: parseInt(document.getElementById('durationInput').value) || 0,
-    notes:    document.getElementById('notesInput').value.trim(),
+    status:      activeStatus,
+    duration:    parseInt(document.getElementById('durationInput').value) || 0,
+    notes:       document.getElementById('notesInput').value.trim(),
+    workout_key: activeWorkoutKey,
   };
 
   entries[activeKey] = entryData;  // mise à jour locale immédiate
